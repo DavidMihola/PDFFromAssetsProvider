@@ -25,7 +25,14 @@ import android.util.Log;
 // 
 // but this version does not require all PDFs be directly under PDF_PATH,
 // instead they can also be in sub-directories of that directory
-public class PDFFromAssetsProvider extends ContentProvider {
+//
+// this version also uses the openAssetFile and writehDataToPipe methods from
+// Lars Vogel's tutorial at:
+// http://www.vogella.com/code/ApiDemos/src/com/example/android/apis/content/FileProvider.html
+// to deal with compressed files
+//
+// this removes the need to append the ugly mp3 suffix to your PDFs
+public class PDFFromAssetsProvider extends ContentProvider implements ContentProvider.PipeDataWriter<InputStream>{
 
 	// this is the path to your pdf root folder (relative to assets)
 	private static final String PDF_ROOT = "shared_pdfs/";
@@ -42,29 +49,57 @@ public class PDFFromAssetsProvider extends ContentProvider {
 		return "application/pdf";
 	}
 
-	// note that all pdfs must have the suffix .mp3 to prevent them from
-	// being compressed; if you store them uncompressed (i.e. without the
-	// mp3 suffix), you get a FileNotFoundException when you try to open it
+	// note that (in contrast to the previous version of the provider) this version does
+	// need an mp3 suffix on your PDF file name
 	@Override
 	public AssetFileDescriptor openAssetFile(Uri uri, String mode) throws FileNotFoundException {
 
-		AssetManager assetManager = getContext().getAssets();
 		String filename = uri.getPath();
 
 		if (filename == null) {
 			throw new FileNotFoundException();
 		}
 
-		File file = new File(PDF_ROOT, filename + ".mp3");
-
-		AssetFileDescriptor assetFileDescriptor = null;
+		File file = new File(PDF_ROOT, filename);
 
 		try {
-			assetFileDescriptor = assetManager.openFd(file.toString());
+
+			InputStream is = getContext().getAssets().open(file.toString());
+			// Start a new thread that pipes the stream data back to the caller.
+
+			return new AssetFileDescriptor(
+					openPipeHelper(uri, null, null, is, this), 0,
+					AssetFileDescriptor.UNKNOWN_LENGTH);
 		} catch (IOException e) {
 			e.printStackTrace();
+			FileNotFoundException fnf = new FileNotFoundException("Unable to open " + uri);
+			throw fnf;
 		}
-		return assetFileDescriptor;
+	}
+
+	@Override
+	public void writeDataToPipe(ParcelFileDescriptor output, Uri uri, String mimeType,
+			Bundle opts, InputStream args) {
+		// Transfer data from the asset to the pipe the client is reading.
+		byte[] buffer = new byte[8192];
+		int n;
+		FileOutputStream fout = new FileOutputStream(output.getFileDescriptor());
+		try {
+			while ((n=args.read(buffer)) >= 0) {
+				fout.write(buffer, 0, n);
+			}
+		} catch (IOException e) {
+			e.printStackTrace();
+		} finally {
+			try {
+				args.close();
+			} catch (IOException e) {
+			}
+			try {
+				fout.close();
+			} catch (IOException e) {
+			}
+		}
 	}
 
 	// the remaining methods should not actually be called (I think)
